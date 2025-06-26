@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src import ENV_PATH
@@ -19,12 +20,12 @@ class Settings(BaseSettings):
     admin_secret_token: str = Field(alias="ADMIN_SECRET_TOKEN")
 
     # Backend Server Settings
-    backend_urls: list[str] = Field(
+    backend_urls: str = Field(
         alias="BACKEND_URLS", description="Comma-separated list of backend server URLs with ports"
     )
-    allowed_hosts: list[str] = Field(
+    allowed_hosts: str = Field(
         alias="ALLOWED_HOSTS",
-        default=[],
+        default="",
         description="Comma-separated list of allowed hosts. Defaults to allow all hosts. If empty, all hosts are allowed.",
     )
 
@@ -55,8 +56,31 @@ class Settings(BaseSettings):
     log_to_file: bool = Field(alias="LOG_TO_FILE", default=True)
     debug: bool = Field(alias="DEBUG")
 
+    @field_validator("backend_urls", mode="after")
+    @classmethod
+    def parse_backend_urls(cls, v: Any) -> list[str]:
+        """Parse comma-separated backend URLs string into a list"""
+        if isinstance(v, str):
+            # Split by comma and strip whitespace
+            return [url.strip() for url in v.split(",") if url.strip()]
+        elif isinstance(v, list):
+            return v
+        else:
+            raise ValueError("backend_urls must be a comma-separated string or list")
+
+    @field_validator("allowed_hosts", mode="after")
+    @classmethod
+    def parse_allowed_hosts(cls, v: Any) -> list[str]:
+        """Parse comma-separated allowed hosts string into a list"""
+        if isinstance(v, str):
+            # Split by comma and strip whitespace
+            return [host.strip() for host in v.split(",") if host.strip()]
+        elif isinstance(v, list):
+            return v
+        else:
+            return []
+
     model_config = SettingsConfigDict(
-        env_prefix="",
         env_file=(f"{ENV_PATH}/.env", f"{ENV_PATH}/.secret"),
         case_sensitive=True,
         env_file_encoding="utf-8",

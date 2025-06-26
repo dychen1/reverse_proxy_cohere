@@ -8,13 +8,11 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from src.utils.backend_server import BackendServer
 
-logger = logging.getLogger(__name__)
-
 
 class HealthChecker:
     """Async health checker for backend servers with reusable session and improved error handling"""
 
-    def __init__(self, check_interval: int, timeout: int, max_connections: int):
+    def __init__(self, check_interval: int, timeout: int, max_connections: int, logger: logging.Logger):
         self.check_interval = check_interval
         self.timeout = timeout
         self.max_connections = max_connections
@@ -22,11 +20,12 @@ class HealthChecker:
         self.task: asyncio.Task | None = None
         self.session: ClientSession | None = None
         self._backends: list[BackendServer] = []
+        self.logger = logger
 
     async def start(self, backends: list[BackendServer]):
         """Start health checking with proper session management"""
         if self.running:
-            logger.warning("Health checker is already running")
+            self.logger.warning("Health checker is already running")
             return
 
         self._backends = backends
@@ -45,7 +44,7 @@ class HealthChecker:
         self.session = ClientSession(timeout=timeout, connector=connector, headers={"User-Agent": "HealthChecker/1.0"})
 
         self.task = asyncio.create_task(self._health_check_loop())
-        logger.info(f"Health checker started for {len(backends)} backends")
+        self.logger.info(f"Health checker started for {len(backends)} backends")
 
     async def stop(self):
         """Graceful exits health checking and cleanup resources"""
@@ -60,14 +59,14 @@ class HealthChecker:
             try:
                 await self.task
             except asyncio.CancelledError:
-                logger.debug("Health check task cancelled")
+                self.logger.debug("Health check task cancelled")
 
         # Close the session
         if self.session:
             await self.session.close()
             self.session = None
 
-        logger.info("Health checker stopped")
+        self.logger.info("Health checker stopped")
 
     async def _health_check_loop(self):
         """Main health check loop with proper error handling"""
@@ -77,7 +76,7 @@ class HealthChecker:
         while self.running:
             try:
                 if not self._backends:
-                    logger.warning("No backends to check")
+                    self.logger.warning("No backends to check")
                     await asyncio.sleep(self.check_interval)
                     continue
 
@@ -88,16 +87,16 @@ class HealthChecker:
                 # Log any exceptions that occurred
                 for i, result in enumerate(results):
                     if isinstance(result, Exception):
-                        logger.error(f"Unexpected error checking backend {self._backends[i].url}: {result}")
+                        self.logger.error(f"Unexpected error checking backend {self._backends[i].url}: {result}")
 
                 consecutive_failures = 0
 
             except Exception as e:
                 consecutive_failures += 1
-                logger.error(f"Health check loop error (attempt {consecutive_failures}): {e}")
+                self.logger.error(f"Health check loop error (attempt {consecutive_failures}): {e}")
 
                 if consecutive_failures >= max_consecutive_failures:
-                    logger.critical("Too many consecutive health check failures, stopping")
+                    self.logger.critical("Too many consecutive health check failures, stopping")
                     break
 
             # Use exponential backoff on failures
@@ -116,7 +115,7 @@ class HealthChecker:
     async def _check_backend(self, backend: BackendServer) -> bool:
         """Check health of a single backend with tenacity retry logic"""
         if not self.session:
-            logger.error("No session available for health check")
+            self.logger.error("No session available for health check")
             return False
 
         health_url = f"{backend.url.rstrip('/')}/health"
@@ -132,32 +131,32 @@ class HealthChecker:
 
                 if response.status == 200:
                     if not backend.healthy:
-                        logger.info(f"Backend {backend.url} is now healthy (response time: {response_time:.3f}s)")
+                        self.logger.info(f"Backend {backend.url} is now healthy (response time: {response_time:.3f}s)")
 
                     backend.healthy = True
                     # Dont record response time for health check
                     return True
                 else:
-                    logger.warning(f"Backend {backend.url} health check failed: HTTP {response.status}")
+                    self.logger.warning(f"Backend {backend.url} health check failed: HTTP {response.status}")
                     backend.healthy = False
                     return False
 
         except asyncio.TimeoutError:
             if backend.healthy:
-                logger.warning(f"Backend {backend.url} health check timed out after {self.timeout}s")
+                self.logger.warning(f"Backend {backend.url} health check timed out after {self.timeout}s")
             backend.healthy = False
             backend.last_check_time = time.monotonic()
             raise  # Re-raise for tenacity to handle
 
         except aiohttp.ClientError as e:
             if backend.healthy:
-                logger.warning(f"Backend {backend.url} health check failed: {type(e).__name__}: {e}")
+                self.logger.warning(f"Backend {backend.url} health check failed: {type(e).__name__}: {e}")
             backend.healthy = False
             backend.last_check_time = time.monotonic()
             raise  # Re-raise for tenacity to handle
 
         except Exception as e:
-            logger.error(f"Unexpected error checking backend {backend.url}: {type(e).__name__}: {e}")
+            self.logger.error(f"Unexpected error checking backend {backend.url}: {type(e).__name__}: {e}")
             backend.healthy = False
             backend.last_check_time = time.monotonic()
             return False  # Don't retry unexpected errors

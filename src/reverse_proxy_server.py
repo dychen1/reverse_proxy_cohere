@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -12,23 +13,22 @@ from src.utils.backend_server import BackendServer
 from src.utils.connection_pool import ConnectionPool
 from src.utils.health_checker import HealthChecker
 from src.utils.load_balancer import LoadBalancer, LoadBalanceStrategy
-from src.utils.logging import get_app_logger
-
-logger = get_app_logger()
+from src.utils.logging import get_queue_logger
 
 
 class ReverseProxy:
     """High-performance async reverse proxy"""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, logger: logging.Logger):
         self.settings = settings
-
+        self.logger = logger
         self.backends: list[BackendServer] = [BackendServer(backend_url) for backend_url in self.settings.backend_urls]
         self.load_balancer = LoadBalancer(LoadBalanceStrategy(self.settings.load_balance_strategy))
         self.health_checker = HealthChecker(
             self.settings.health_check_interval,
             self.settings.health_check_timeout,
             self.settings.health_check_max_connections,
+            self.logger,
         )
         self.connection_pool = ConnectionPool(
             len(self.settings.backend_urls),
@@ -77,7 +77,7 @@ class ReverseProxy:
         if request.method not in ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"]:
             return web.Response(text="Method not allowed", status=405)
 
-        logger.info(f"{request.remote} - {request.method} - {request.path}")
+        self.logger.info(f"{request.remote} - {request.method} - {request.path}")
         start_time: float = time.monotonic()
         try:
             self.active_requests += 1
@@ -100,13 +100,13 @@ class ReverseProxy:
 
             except Exception as e:
                 backend.failed_requests += 1
-                logger.error(f"Error forwarding to {backend.url}: {e}")
+                self.logger.error(f"Error forwarding to {backend.url}: {e}")
                 return web.Response(text=f"Backend error: {str(e)}", status=502, headers={"Content-Type": "text/plain"})
             finally:
                 backend.active_connections -= 1
 
         except Exception as e:
-            logger.error(f"Error selecting backend: {e}")
+            self.logger.error(f"Error selecting backend: {e}")
             return web.Response(text=f"Proxy error: {str(e)}", status=500, headers={"Content-Type": "text/plain"})
         finally:
             self.active_requests -= 1
@@ -192,13 +192,13 @@ class ReverseProxy:
         )
         await self.site.start()
 
-        logger.info(f"Async reverse proxy started - Status\n{self.status}")
-        logger.info(f"Status endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/status")
-        logger.info(f"Health endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/health")
+        self.logger.info(f"Reverse proxy started - Status\n{self.status}")
+        self.logger.info(f"Status endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/status")
+        self.logger.info(f"Health endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/health")
 
     async def stop(self):
         """Stop the reverse proxy server"""
-        logger.info("Shutting down proxy server...")
+        self.logger.info("Shutting down proxy server...")
 
         # Stop health checker
         await self.health_checker.stop()
@@ -216,7 +216,9 @@ class ReverseProxy:
 async def main():
     """Main entry point"""
     settings = Settings()
-    proxy = ReverseProxy(settings)
+    logger, listener = get_queue_logger()
+    proxy = ReverseProxy(settings, logger)
+
     try:
         await proxy.start()
         await asyncio.Event().wait()
@@ -224,6 +226,7 @@ async def main():
         logger.info("Shutting down...")
     finally:
         await proxy.stop()
+        listener.stop()
 
 
 if __name__ == "__main__":
