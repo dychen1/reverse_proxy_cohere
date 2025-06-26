@@ -1,5 +1,6 @@
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -23,9 +24,22 @@ class BackendServer:
         return round(sum(self.response_times) / len(self.response_times), 4)
 
     @property
-    def sucess_rate(self) -> float:
+    def success_rate(self) -> float:
         """Calculate success rate for backend server"""
         return round((self.total_requests - self.failed_requests) / max(self.total_requests, 1) * 100, 2)
+
+    @property
+    def status(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "healthy": self.healthy,
+            "active_connections": self.active_connections,
+            "total_requests": self.total_requests,
+            "failed_requests": self.failed_requests,
+            "success_rate": self.success_rate,
+            "avg_response_time": self.avg_response_time,
+            "last_check_time": self.last_check_time,
+        }
 
     def add_response_time(self, time: float):
         """Add response time and keep only last 100"""
