@@ -110,26 +110,25 @@ class IntegrationTestRunner:
 
         try:
             client_timeout = aiohttp.ClientTimeout(total=timeout)
-            if method.upper() == "GET":
-                async with aiohttp.ClientSession(timeout=client_timeout) as session:
+            async with aiohttp.ClientSession(timeout=client_timeout) as session:
+                if method.upper() == "GET":
                     async with session.get(url) as response:
                         status = response.status
                         response_text = await response.text()
                         try:
                             response_data = await response.json()
-                        except:
+                        except Exception:
                             response_data = response_text
-            elif method.upper() == "POST":
-                async with aiohttp.ClientSession(timeout=client_timeout) as session:
+                elif method.upper() == "POST":
                     async with session.post(url, json=data) as response:
                         status = response.status
                         response_text = await response.text()
                         try:
                             response_data = await response.json()
-                        except:
+                        except Exception:
                             response_data = response_text
-            else:
-                raise ValueError(f"Unsupported method: {method}")
+                else:
+                    raise ValueError(f"Unsupported method: {method}")
 
             duration = time.monotonic() - start_time
             success = status == expected_status
@@ -215,7 +214,7 @@ class IntegrationTestRunner:
             else:
                 self.test_results.append(result)
 
-    async def verify_load_balancing(self, num_requests: int = 5000) -> bool:
+    async def verify_load_balancing(self, num_requests: int = settings.test_num_requests) -> bool:
         """
         Sends a burst of requests to verify that they are distributed
         across multiple backend servers.

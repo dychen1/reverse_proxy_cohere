@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     log_to_file: bool = Field(alias="LOG_TO_FILE", default=True)
     debug: bool = Field(alias="DEBUG")
 
+    # Test Settings
+    test_num_requests: int = Field(alias="TEST_NUM_REQUESTS")
+
     model_config = SettingsConfigDict(
         env_file=(f"{ENV_PATH}/.env", f"{ENV_PATH}/.secret"),
         case_sensitive=True,
