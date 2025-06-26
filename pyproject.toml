@@ -12,10 +12,7 @@ main = [
     "pydantic-settings>=2.10.1",
     "tenacity>=8.2.0",
 ]
-dev = [
-    "mypy>=1.16.1",
-    "ruff>=0.12.0",
-]
+dev = ["fastapi>=0.115.13", "mypy>=1.16.1", "ruff>=0.12.0", "uvicorn>=0.34.3"]
 
 
 [tool.uv]
