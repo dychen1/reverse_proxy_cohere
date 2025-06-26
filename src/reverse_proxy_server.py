@@ -59,7 +59,7 @@ class ReverseProxy:
         self.app.router.add_get("/_proxy/status", self._status_handler)
         self.app.router.add_get("/_proxy/health", self._health_handler)
 
-    async def _proxy_handler(self, request: web.Request) -> web.Response:
+    async def _proxy_handler(self, request: web.Request) -> web.StreamResponse:
         """Main proxy request handler"""
         # Check allowed hosts
         if self.settings.allowed_hosts:
@@ -105,7 +105,7 @@ class ReverseProxy:
         finally:
             self.active_requests -= 1
 
-    async def _forward_request(self, request: Request, backend: BackendServer) -> Response:
+    async def _forward_request(self, request: Request, backend: BackendServer) -> web.StreamResponse:
         """Forward request to backend server"""
         # Build target URL
         target_url = f"{backend.url}{request.path_qs}"
