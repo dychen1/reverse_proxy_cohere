@@ -12,7 +12,10 @@ main = [
     "pydantic-settings>=2.10.1",
     "tenacity>=8.2.0",
 ]
-dev = ["ruff>=0.12.0"]
+dev = [
+    "mypy>=1.16.1",
+    "ruff>=0.12.0",
+]
 
 
 [tool.uv]
