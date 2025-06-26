@@ -107,7 +107,7 @@ class HealthChecker:
             await asyncio.sleep(sleep_time)
 
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=2.0),
         retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
         reraise=True,
