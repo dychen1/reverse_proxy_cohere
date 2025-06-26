@@ -139,14 +139,31 @@ class ReverseProxy:
             data=request.content,  # Stream body without reading it into memory
             allow_redirects=False,
         ) as backend_response:
-            # Prepare response headers
-            response_headers = dict(backend_response.headers)
+            # Prepare response headers for streaming
+            response_headers = {k: v for k, v in backend_response.headers.items() if k.lower() not in hop_by_hop}
 
-            # Remove hop-by-hop headers from response
-            response_headers = {k: v for k, v in response_headers.items() if k.lower() not in hop_by_hop}
+            # Stream the response back to the client
+            response = web.StreamResponse(
+                status=backend_response.status,
+                headers=response_headers,
+                reason=backend_response.reason,
+            )
+            await response.prepare(request)
 
-            # TODO: Cache response headers and body
-            return web.Response(body=backend_response.content, status=backend_response.status, headers=response_headers)
+            try:
+                # Read from backend and write to client chunk by chunk
+                while True:
+                    chunk = await backend_response.content.read(8192)
+                    if not chunk:
+                        break
+                    await response.write(chunk)
+
+                await response.write_eof()
+                return response
+
+            except asyncio.CancelledError:
+                self.logger.warning(f"Client disconnected before response was fully sent for {request.path}")
+                raise  # Re-raising is important for aiohttp to handle cleanup
 
     @auth_required
     async def _status_handler(self, request: Request) -> Response:
