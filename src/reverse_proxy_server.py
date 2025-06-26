@@ -44,10 +44,10 @@ class ReverseProxy:
     @property
     def status(self) -> dict[str, Any]:
         return {
-            "uptime": time.monotonic() - self.start_time,
-            "active_requests": self.active_requests,
+            "uptime": float(time.monotonic() - self.start_time),
+            "active_requests": int(self.active_requests),
             "backends": [b.status for b in self.backends],
-            "settings": self.settings.model_dump(),
+            "settings": self.settings.model_dump(mode="json"),
         }
 
     def _setup_routes(self):

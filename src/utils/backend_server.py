@@ -7,7 +7,7 @@ from typing import Any
 class BackendServer:
     url: str
     healthy: bool = True
-    last_check_time: float = 0
+    last_check_time: float = 0.0
     active_connections: int = 0
     total_requests: int = 0  # Need to memory bound - depends on how logging metrics will work
     failed_requests: int = 0
@@ -31,14 +31,14 @@ class BackendServer:
     @property
     def status(self) -> dict[str, Any]:
         return {
-            "url": self.url,
-            "healthy": self.healthy,
-            "active_connections": self.active_connections,
-            "total_requests": self.total_requests,
-            "failed_requests": self.failed_requests,
-            "success_rate": self.success_rate,
-            "avg_response_time": self.avg_response_time,
-            "last_check_time": self.last_check_time,
+            "url": str(self.url),
+            "healthy": bool(self.healthy),
+            "active_connections": int(self.active_connections),
+            "total_requests": int(self.total_requests),
+            "failed_requests": int(self.failed_requests),
+            "success_rate": float(self.success_rate),
+            "avg_response_time": float(self.avg_response_time),
+            "last_check_time": float(self.last_check_time) if self.last_check_time > 0 else None,
         }
 
     def add_response_time(self, time: float):
