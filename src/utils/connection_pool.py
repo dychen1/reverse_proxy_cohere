@@ -4,9 +4,16 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 class ConnectionPool:
     """Manages aiohttp client sessions with connection pooling"""
 
-    def __init__(self, n_hosts: int, max_connections: int, timeout: int = 30, keepalive_timeout: int = 60):
+    def __init__(
+        self,
+        n_hosts: int,
+        max_connections: int,
+        request_timeout: int = 30,
+        connection_timeout: int = 5,
+        keepalive_timeout: int = 60,
+    ):
         self.max_connections = max_connections
-        self.timeout = ClientTimeout(total=timeout, connect=5)
+        self.timeout = ClientTimeout(total=request_timeout, connect=connection_timeout)
         self.connector = TCPConnector(
             limit=max_connections,
             limit_per_host=max_connections // n_hosts,

@@ -13,8 +13,19 @@ class Settings(BaseSettings):
     All settings are frozen (immutable) after initialization via model_config.
     """
 
+    # App settings
+    host: str = Field(alias="HOST")
+    port: int = Field(alias="PORT")
+
     # Backend Server Settings
-    backend_urls: list[str] = Field(alias="BACKEND_URLS")
+    backend_urls: list[str] = Field(
+        alias="BACKEND_URLS", description="Comma-separated list of backend server URLs with ports"
+    )
+    allowed_hosts: list[str] = Field(
+        alias="ALLOWED_HOSTS",
+        default=[],
+        description="Comma-separated list of allowed hosts. Defaults to allow all hosts. If empty, all hosts are allowed.",
+    )
 
     # Load Balancing Settings
     load_balance_strategy: str = Field(
@@ -23,20 +34,19 @@ class Settings(BaseSettings):
         description="Load balancing strategy: least_connections, fastest_avg_response, random",
     )
 
-    # Health Check Settings
-
     # Connection Pool Settings
-    max_connections: int = Field(alias="MAX_CONNECTIONS")
-    connection_timeout: int = Field(alias="CONNECTION_TIMEOUT")
-    keepalive_timeout: int = Field(alias="KEEPALIVE_TIMEOUT")
+    max_connections: int = Field(alias="MAX_CONNECTIONS", description="Maximum number of connections to a single host")
+    connection_timeout: int = Field(alias="CONNECTION_TIMEOUT", description="TCP connection timeout in seconds")
+    keepalive_timeout: int = Field(alias="KEEPALIVE_TIMEOUT", description="TCP keepalive timeout in seconds")
+    request_timeout: int = Field(alias="REQUEST_TIMEOUT", description="Full request lifecycle timeout in seconds")
+    max_body_size: int = Field(alias="MAX_BODY_SIZE", description="Maximum body size in mb")
 
     # Health Checker Connection Pool (separate from main pool)
-    health_check_interval: int = Field(alias="HEALTH_CHECK_INTERVAL")
-    health_check_timeout: int = Field(alias="HEALTH_CHECK_TIMEOUT")
-    health_check_max_connections: int = Field(alias="HEALTH_CHECK_MAX_CONNECTIONS")
-
-    # Request Handling Settings
-    request_timeout: int = Field(alias="REQUEST_TIMEOUT")
+    health_check_interval: int = Field(alias="HEALTH_CHECK_INTERVAL", description="Health check interval in seconds")
+    health_check_timeout: int = Field(alias="HEALTH_CHECK_TIMEOUT", description="Health check timeout in seconds")
+    health_check_max_connections: int = Field(
+        alias="HEALTH_CHECK_MAX_CONNECTIONS", description="Maximum number of connections to a single host"
+    )
 
     # Logger Settings
     log_path: Path = Field(alias="LOG_PATH", default=Path.cwd().parent.parent / "etc" / "logs")
@@ -45,6 +55,7 @@ class Settings(BaseSettings):
     debug: bool = Field(alias="DEBUG")
 
     model_config = SettingsConfigDict(
+        env_prefix="",
         env_file=(f"{ENV_PATH}/.env",),
         case_sensitive=True,
         env_file_encoding="utf-8",

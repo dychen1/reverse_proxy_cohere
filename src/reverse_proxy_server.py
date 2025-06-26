@@ -1,5 +1,6 @@
 import asyncio
 import time
+from urllib.parse import urlparse
 
 from aiohttp import web
 from aiohttp.web import Request, Response
@@ -28,25 +29,25 @@ class ReverseProxy:
             self.settings.health_check_max_connections,
         )
         self.connection_pool = ConnectionPool(
+            len(self.settings.backend_urls),
             self.settings.max_connections,
             self.settings.request_timeout,
+            self.settings.connection_timeout,
             self.settings.keepalive_timeout,
         )
-
-        self.app = web.Application()
+        self.start_time: float = time.monotonic()
+        self.active_requests: int = 0
+        self.max_body_size_bytes = self.settings.max_body_size * 1024 * 1024  # Convert to bytes
+        self.app = web.Application(client_max_size=self.max_body_size_bytes)  # Application level max body size
         self._setup_routes()
 
         # Server components
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
 
-        # Statistics
-        self.total_requests = 0
-        self.active_requests = 0
-        self.start_time = time.time()
-
     def _setup_routes(self):
         """Setup application routes"""
+        # Catch all routes with any method
         self.app.router.add_route("*", "/{path:.*}", self._proxy_handler)
 
         # Add status and health endpoints
@@ -57,27 +58,18 @@ class ReverseProxy:
         """Main proxy request handler"""
         # Check allowed hosts
         if self.settings.allowed_hosts:
-            host = request.headers.get("Host", "").split(":")[0]
-            if host not in self.settings.allowed_hosts:
+            host_domain: str | None = urlparse(f"http://{request.headers.get('Host', '')}").hostname
+            if host_domain is None or host_domain not in self.settings.allowed_hosts:
                 return web.Response(text="Host not allowed", status=403)
-
-        # Check body size
-        max_body_size = getattr(self.settings, "max_body_size", 10 * 1024 * 1024)  # 10MB default
-        content_length = request.headers.get("Content-Length")
-        if content_length and int(content_length) > max_body_size:
-            return web.Response(text="Request body too large", status=413)
 
         # Check request method
         if request.method not in ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"]:
             return web.Response(text="Method not allowed", status=405)
 
-        start_time = time.monotonic()
-        self.total_requests += 1
-        self.active_requests += 1
-
         logger.info(f"{request.remote} - {request.method} - {request.path}")
-
+        start_time: float = time.monotonic()
         try:
+            self.active_requests += 1
             # Select backend
             backend = await self.load_balancer.select_backend(self.backends)
             if not backend:
@@ -102,16 +94,19 @@ class ReverseProxy:
             finally:
                 backend.active_connections -= 1
 
+        except Exception as e:
+            logger.error(f"Error selecting backend: {e}")
+            return web.Response(text=f"Proxy error: {str(e)}", status=500, headers={"Content-Type": "text/plain"})
         finally:
             self.active_requests -= 1
 
     async def _forward_request(self, request: Request, backend: BackendServer) -> Response:
         """Forward request to backend server"""
         # Build target URL
-        target_url = f"{backend.url.rstrip('/')}{request.path_qs}"
+        target_url = f"{backend.url}{request.path_qs}"
 
         # Prepare headers
-        headers = dict(request.headers)
+        headers: dict[str, str] = dict(request.headers)
 
         # Remove hop-by-hop headers
         hop_by_hop = {
@@ -126,22 +121,17 @@ class ReverseProxy:
         headers = {k: v for k, v in headers.items() if k.lower() not in hop_by_hop}
 
         # Add forwarded headers
-        headers["X-Forwarded-For"] = request.remote
+        headers["X-Forwarded-For"] = request.remote if request.remote else "unknown"
         headers["X-Forwarded-Proto"] = request.scheme
         headers["X-Forwarded-Host"] = request.host
 
-        # Read request body
-        if request.can_read_body:
-            data = await request.read()
-        else:
-            data = None
-
         # Forward request using connection pool
+        assert self.connection_pool.session is not None
         async with self.connection_pool.session.request(
             method=request.method,
             url=target_url,
             headers=headers,
-            data=data,
+            data=request.content,  # Stream body without reading it into memory
             allow_redirects=False,
         ) as backend_response:
             # Prepare response headers
@@ -150,21 +140,18 @@ class ReverseProxy:
             # Remove hop-by-hop headers from response
             response_headers = {k: v for k, v in response_headers.items() if k.lower() not in hop_by_hop}
 
-            # Read response body
-            body = await backend_response.read()
-
-            return web.Response(body=body, status=backend_response.status, headers=response_headers)
+            # TODO: Cache response headers and body
+            return web.Response(body=backend_response.content, status=backend_response.status, headers=response_headers)
 
     async def _status_handler(self, request: Request) -> Response:
         """Status endpoint handler"""
-        uptime = time.time() - self.start_time
+        uptime = time.monotonic() - self.start_time
 
         status = {
             "proxy": {
-                "host": self.config.host,
-                "port": self.config.port,
+                "host": self.settings.host,
+                "port": self.settings.port,
                 "uptime": uptime,
-                "total_requests": self.total_requests,
                 "active_requests": self.active_requests,
                 "max_connections": self.settings.max_connections,
                 "strategy": self.settings.load_balance_strategy,

@@ -20,7 +20,12 @@ class BackendServer:
         """Calculate average response time from last 100 requests"""
         if not self.response_times:
             return 0.0
-        return sum(self.response_times) / len(self.response_times)
+        return round(sum(self.response_times) / len(self.response_times), 4)
+
+    @property
+    def sucess_rate(self) -> float:
+        """Calculate success rate for backend server"""
+        return round((self.total_requests - self.failed_requests) / max(self.total_requests, 1) * 100, 2)
 
     def add_response_time(self, time: float):
         """Add response time and keep only last 100"""
