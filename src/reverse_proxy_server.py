@@ -1,11 +1,13 @@
 import asyncio
 import time
+from typing import Any
 from urllib.parse import urlparse
 
 from aiohttp import web
 from aiohttp.web import Request, Response
 
 from src.settings import Settings
+from src.utils.auth import auth_required
 from src.utils.backend_server import BackendServer
 from src.utils.connection_pool import ConnectionPool
 from src.utils.health_checker import HealthChecker
@@ -44,6 +46,15 @@ class ReverseProxy:
         # Server components
         self.runner: web.AppRunner | None = None
         self.site: web.TCPSite | None = None
+
+    @property
+    def status(self) -> dict[str, Any]:
+        return {
+            "uptime": time.monotonic() - self.start_time,
+            "active_requests": self.active_requests,
+            "backends": [b.status for b in self.backends],
+            "settings": self.settings.model_dump(),
+        }
 
     def _setup_routes(self):
         """Setup application routes"""
@@ -143,40 +154,10 @@ class ReverseProxy:
             # TODO: Cache response headers and body
             return web.Response(body=backend_response.content, status=backend_response.status, headers=response_headers)
 
+    @auth_required
     async def _status_handler(self, request: Request) -> Response:
-        """Status endpoint handler"""
-        uptime = time.monotonic() - self.start_time
-
-        status = {
-            "proxy": {
-                "host": self.settings.host,
-                "port": self.settings.port,
-                "uptime": uptime,
-                "active_requests": self.active_requests,
-                "max_connections": self.settings.max_connections,
-                "strategy": self.settings.load_balance_strategy,
-            },
-            "backends": [
-                {
-                    "url": b.url,
-                    "healthy": b.healthy,
-                    "active_connections": b.active_connections,
-                    "total_requests": b.total_requests,
-                    "failed_requests": b.failed_requests,
-                    "success_rate": round((b.total_requests - b.failed_requests) / max(b.total_requests, 1) * 100, 2),
-                    "avg_response_time": round(b.avg_response_time, 3),
-                    "last_check_time": b.last_check_time,
-                }
-                for b in self.backends
-            ],
-            "config": {
-                "health_check_interval": self.settings.health_check_interval,
-                "health_check_timeout": self.settings.health_check_timeout,
-                "request_timeout": self.settings.request_timeout,
-            },
-        }
-
-        return web.json_response(status)
+        """Status endpoint"""
+        return web.json_response(self.status)
 
     async def _health_handler(self, request: Request) -> Response:
         """Health check endpoint"""
@@ -211,9 +192,7 @@ class ReverseProxy:
         )
         await self.site.start()
 
-        logger.info(f"Async reverse proxy started on {self.settings.host}:{self.settings.port}")
-        logger.info(f"Load balancing strategy: {self.settings.load_balance_strategy}")
-        logger.info(f"Configured backends: {[str(b) for b in self.backends]}")
+        logger.info(f"Async reverse proxy started - Status\n{self.status}")
         logger.info(f"Status endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/status")
         logger.info(f"Health endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/health")
 

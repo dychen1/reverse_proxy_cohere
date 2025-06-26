@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # App settings
     host: str = Field(alias="HOST")
     port: int = Field(alias="PORT")
+    admin_secret_token: str = Field(alias="ADMIN_SECRET_TOKEN")
 
     # Backend Server Settings
     backend_urls: list[str] = Field(
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",
-        env_file=(f"{ENV_PATH}/.env",),
+        env_file=(f"{ENV_PATH}/.env", f"{ENV_PATH}/.secret"),
         case_sensitive=True,
         env_file_encoding="utf-8",
         frozen=True,
