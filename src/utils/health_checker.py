@@ -10,7 +10,23 @@ from src.utils.backend_server import BackendServer
 
 
 class HealthChecker:
-    """Async health checker for backend servers with reusable session and improved error handling"""
+    """
+    Asynchronous health checker for backend servers with intelligent retry logic.
+
+    Monitors the health of backend servers by periodically sending HTTP requests
+    to their health endpoints. Uses exponential backoff, connection pooling, and
+    retry mechanisms to provide reliable health monitoring with minimal overhead.
+
+    Attributes:
+        check_interval (int): Seconds between health check cycles
+        timeout (int): HTTP request timeout in seconds
+        max_connections (int): Maximum connections in health check pool
+        running (bool): Whether health checker is currently active
+        task (asyncio.Task | None): Background health check task
+        session (ClientSession | None): HTTP session for health checks
+        _backends (list[BackendServer]): List of backends to monitor
+        logger (logging.Logger): Logger for health check events
+    """
 
     def __init__(self, check_interval: int, timeout: int, max_connections: int, logger: logging.Logger):
         self.check_interval = check_interval
@@ -22,8 +38,16 @@ class HealthChecker:
         self._backends: list[BackendServer] = []
         self.logger = logger
 
-    async def start(self, backends: list[BackendServer]):
-        """Start health checking with proper session management"""
+    async def start(self, backends: list[BackendServer]) -> None:
+        """
+        Initializes the health checker with a dedicated HTTP session and begins the background health monitoring loop.
+
+        Note:
+            - Idempotent: safe to call multiple times
+            - Creates dedicated connection pool for health checks
+            - Starts background task for continuous monitoring
+            - Health checks begin immediately after startup
+        """
         if self.running:
             self.logger.warning("Health checker is already running")
             return
@@ -46,8 +70,18 @@ class HealthChecker:
         self.task = asyncio.create_task(self._health_check_loop())
         self.logger.info(f"Health checker started for {len(backends)} backends")
 
-    async def stop(self):
-        """Graceful exits health checking and cleanup resources"""
+    async def stop(self) -> None:
+        """
+        Cancels the background health check task, closes the HTTP session,
+        and performs proper cleanup to prevent resource leaks. This method
+        should be called during proxy shutdown.
+
+        Note:
+            - Idempotent: safe to call multiple times
+            - Cancels background task gracefully
+            - Closes HTTP session and connection pool
+            - Resets internal state for potential reuse
+        """
         if not self.running:
             return
 
@@ -68,8 +102,26 @@ class HealthChecker:
 
         self.logger.info("Health checker stopped")
 
-    async def _health_check_loop(self):
-        """Main health check loop with proper error handling"""
+    async def _health_check_loop(self) -> None:
+        """
+        Main health check loop with error handling and exponential backoff.
+
+        Continuously monitors all backend servers by sending HTTP GET requests
+        to their /health endpoints. Uses concurrent requests for efficiency and
+        implements exponential backoff on failures to prevent overwhelming
+        struggling backends.
+
+        The loop:
+        1. Checks all backends concurrently
+        2. Updates health status based on responses
+        3. Implements exponential backoff on failures
+        4. Handles errors gracefully with retry limits
+        5. Logs health status changes and errors
+
+        Error handling:
+        - Stops after 10 consecutive failures to prevent resource waste
+        - Continues operation even if individual backends fail
+        """
         consecutive_failures = 0
         max_consecutive_failures = 10
 
@@ -113,7 +165,36 @@ class HealthChecker:
         reraise=True,
     )
     async def _check_backend(self, backend: BackendServer) -> bool:
-        """Check health of a single backend with tenacity retry logic"""
+        """
+        Check health of a single backend server with retry logic.
+
+        Sends an HTTP GET request to the backend's /health endpoint and updates
+        the backend's health status based on the response. Uses tenacity retry
+        logic to handle transient network issues and timeouts.
+
+        Health check logic:
+        - HTTP 200: Backend is healthy
+        - HTTP 4xx/5xx: Backend is unhealthy
+        - Timeout: Backend is unhealthy (with retry)
+        - Network error: Backend is unhealthy (with retry)
+
+        Args:
+            backend: BackendServer instance to check
+
+        Returns:
+            bool: True if backend is healthy, False otherwise
+
+        Retry behavior:
+        - Retries up to 2 times on network errors and timeouts
+        - Uses exponential backoff between retries (0.5s to 2.0s)
+        - Does not retry on HTTP error responses (4xx/5xx)
+        - Does not retry on unexpected exceptions
+
+        Note:
+            - Updates backend.last_check_time on every check
+            - Logs health status changes for monitoring
+            - Response times are not recorded for health checks
+        """
         if not self.session:
             self.logger.error("No session available for health check")
             return False

@@ -17,9 +17,39 @@ from src.utils.logging import get_queue_logger
 
 
 class ReverseProxy:
-    """High-performance async reverse proxy"""
+    """
+    High-performance asynchronous reverse proxy server with load balancing and health checking.
+
+    This proxy forwards HTTP requests to multiple backend servers using configurable
+    load balancing strategies. It provides health monitoring, connection pooling,
+    and streaming response handling for optimal performance.
+
+    Attributes:
+        settings (Settings): Configuration settings for the proxy
+        logger (logging.Logger): Logger instance for proxy operations
+        backends (list[BackendServer]): List of configured backend servers
+        load_balancer (LoadBalancer): Load balancing strategy implementation
+        connection_pool (ConnectionPool): HTTP connection pool for backend requests
+        start_time (float): Timestamp when the proxy was started
+        active_requests (int): Current number of active requests being processed
+        max_body_size_bytes (int): Maximum request body size in bytes
+        app (web.Application): aiohttp web application instance
+        runner (web.AppRunner | None): Application runner for the web server
+        site (web.TCPSite | None): TCP site for serving HTTP requests
+    """
 
     def __init__(self, settings: Settings, logger: logging.Logger):
+        """
+        Initialize the reverse proxy with configuration and logging.
+
+        Args:
+            settings (Settings): Proxy configuration including backend URLs,
+                               load balancing strategy, and connection settings
+            logger (logging.Logger): Logger instance for recording proxy operations
+
+        Raises:
+            ValueError: If no backend URLs are configured in settings
+        """
         self.settings = settings
         self.logger = logger
         self.backends: list[BackendServer] = [BackendServer(backend_url) for backend_url in self.settings.backend_urls]
@@ -43,6 +73,9 @@ class ReverseProxy:
 
     @property
     def status(self) -> dict[str, Any]:
+        """
+        Get current proxy status and metrics.
+        """
         return {
             "uptime": float(time.monotonic() - self.start_time),
             "active_requests": int(self.active_requests),
@@ -50,8 +83,18 @@ class ReverseProxy:
             "settings": self.settings.model_dump(mode="json"),
         }
 
-    def _setup_routes(self):
-        """Setup application routes"""
+    def _setup_routes(self) -> None:
+        """
+        Configure application routes and endpoints.
+
+        Sets up the main proxy handler for all incoming requests and
+        administrative endpoints for status and health monitoring.
+
+        Routes configured:
+        - "* /{path:.*}": Catch-all proxy handler for forwarding requests
+        - "GET /_proxy/status": Administrative status endpoint (requires auth)
+        - "GET /_proxy/health": Health check endpoint for monitoring
+        """
         # Catch all routes with any method
         self.app.router.add_route("*", "/{path:.*}", self._proxy_handler)
 
@@ -60,7 +103,29 @@ class ReverseProxy:
         self.app.router.add_get("/_proxy/health", self._health_handler)
 
     async def _proxy_handler(self, request: web.Request) -> web.StreamResponse:
-        """Main proxy request handler"""
+        """
+        Main proxy request handler for forwarding HTTP requests to backend servers.
+
+        This method processes incoming HTTP requests by:
+        1. Validating host headers and request methods
+        2. Selecting an appropriate backend using load balancing
+        3. Forwarding the request to the selected backend
+        4. Streaming the response back to the client
+        5. Tracking metrics and handling errors
+
+        Args:
+            request (web.Request): Incoming HTTP request from client
+
+        Returns:
+            web.StreamResponse: HTTP response to send back to client
+
+        Raises:
+            web.HTTPForbidden (403): If host is not in allowed_hosts list
+            web.HTTPMethodNotAllowed (405): If HTTP method is not supported
+            web.HTTPServiceUnavailable (503): If no healthy backends available
+            web.HTTPBadGateway (502): If backend request fails
+            web.HTTPInternalServerError (500): If proxy encounters internal error
+        """
         # Check allowed hosts
         if self.settings.allowed_hosts:
             host_domain: str | None = urlparse(f"http://{request.headers.get('Host', '')}").hostname
@@ -106,7 +171,32 @@ class ReverseProxy:
             self.active_requests -= 1
 
     async def _forward_request(self, request: Request, backend: BackendServer) -> web.StreamResponse:
-        """Forward request to backend server"""
+        """
+        Forward an HTTP request to a specific backend server.
+
+        This method handles the actual forwarding of requests to backend servers,
+        including header manipulation, request body streaming, and response streaming.
+        It ensures proper HTTP semantics are maintained while adding proxy-specific
+        headers for backend identification.
+
+        Args:
+            request (Request): Original client request to forward
+            backend (BackendServer): Target backend server for the request
+
+        Returns:
+            web.StreamResponse: Streaming response from the backend server
+
+        Raises:
+            asyncio.CancelledError: If client disconnects during response streaming
+            aiohttp.ClientError: If backend request fails
+            Exception: For other forwarding errors
+
+        Note:
+            - Removes hop-by-hop headers that shouldn't be forwarded
+            - Adds X-Forwarded-* headers for backend identification
+            - Streams request body without loading into memory
+            - Streams response body in chunks for memory efficiency
+        """
         # Build target URL
         target_url = f"{backend.url}{request.path_qs}"
 
@@ -167,11 +257,45 @@ class ReverseProxy:
 
     @auth_required
     async def _status_handler(self, request: Request) -> Response:
-        """Status endpoint"""
+        """
+        Administrative endpoint for proxy status and metrics.
+
+        Provides detailed information about the proxy's current state including:
+        uptime, active requests, backend health status, and configuration settings.
+        This endpoint requires authentication via the @auth_required decorator.
+
+        Args:
+            request (Request): HTTP request for status information
+
+        Returns:
+            Response: JSON response containing proxy status and metrics
+
+        Security:
+            Requires valid Authorization header with Bearer token
+        """
         return web.json_response(self.status)
 
     async def _health_handler(self, request: Request) -> Response:
-        """Health check endpoint"""
+        """
+        Health check endpoint for monitoring and load balancer integration.
+
+        Provides a simple health status indicating whether the proxy has
+        any healthy backend servers available. This endpoint is typically
+        used by external monitoring systems and load balancers to determine
+        if the proxy should receive traffic.
+
+        Args:
+            request (Request): HTTP request for health check
+
+        Returns:
+            Response: JSON response with health status:
+                - status: "healthy" if backends available, "unhealthy" otherwise
+                - healthy_backends: Number of currently healthy backends
+                - total_backends: Total number of configured backends
+
+        Note:
+            Returns HTTP 503 status if no healthy backends are available
+        """
         healthy_backends = len([b for b in self.backends if b.healthy])
 
         if healthy_backends > 0:
@@ -183,8 +307,24 @@ class ReverseProxy:
                 {"status": "unhealthy", "healthy_backends": 0, "total_backends": len(self.backends)}, status=503
             )
 
-    async def start(self):
-        """Start the reverse proxy server"""
+    async def start(self) -> None:
+        """
+        Start the reverse proxy server and all associated components.
+
+        This method initializes and starts the proxy server, including:
+        1. Connection pool initialization
+        2. Web server setup and binding
+        3. Health checker startup
+        4. Logging of startup information
+
+        The server will begin accepting HTTP requests on the configured
+        host and port once this method completes successfully.
+
+        Raises:
+            Exception: If no backend servers are configured
+            OSError: If the server cannot bind to the specified host/port
+            Exception: If connection pool or health checker fails to start
+        """
         if not self.backends:
             raise Exception("No backend servers configured")
 
@@ -199,15 +339,30 @@ class ReverseProxy:
 
         self.site = web.TCPSite(
             self.runner, self.settings.host, self.settings.port, reuse_address=True, reuse_port=True
-        )
+        )  # Allows to run multiple of the same application on the same port - No prod downtime if switching using same port
         await self.site.start()
 
         self.logger.info(f"Reverse proxy started - Status\n{self.status}")
         self.logger.info(f"Status endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/status")
         self.logger.info(f"Health endpoint: http://{self.settings.host}:{self.settings.port}/_proxy/health")
 
-    async def stop(self):
-        """Stop the reverse proxy server"""
+    async def stop(self) -> None:
+        """
+        Gracefully stop the reverse proxy server and cleanup resources.
+
+        This method performs a clean shutdown of all proxy components:
+        1. Stops accepting new HTTP requests
+        2. Closes the web server and TCP site
+        3. Closes the connection pool and all backend connections
+        4. Logs shutdown information
+
+        The method ensures that in-flight requests are allowed to complete
+        before shutting down, providing a graceful termination.
+
+        Note:
+            This method is typically called during application shutdown
+            and should be awaited to ensure proper cleanup.
+        """
         self.logger.info("Shutting down proxy server...")
 
         # Stop web server
@@ -220,8 +375,33 @@ class ReverseProxy:
         await self.connection_pool.close()
 
 
-async def main():
-    """Main entry point"""
+async def main() -> None:
+    """
+    Main entry point for the reverse proxy server application.
+
+    This function initializes and runs the complete reverse proxy server,
+    including all supporting components like health checking and logging.
+    It handles graceful shutdown on keyboard interrupt and ensures proper
+    cleanup of all resources.
+
+    The function runs indefinitely until interrupted, maintaining the proxy
+    server in a running state while continuously monitoring backend health
+    and handling incoming requests.
+
+    Components started:
+    - Settings configuration
+    - Logging system with file and stdout output
+    - Reverse proxy server
+    - Health checker for backend monitoring
+
+    Signal handling:
+    - SIGINT (Ctrl+C): Graceful shutdown
+    - SIGTERM: Graceful shutdown
+
+    Raises:
+        KeyboardInterrupt: When user interrupts the application
+        Exception: If any component fails to start or run properly
+    """
     settings = Settings()
     logger, listener = get_queue_logger(
         file_path=settings.log_path,

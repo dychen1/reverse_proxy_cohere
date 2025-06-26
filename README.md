@@ -152,18 +152,17 @@ TODO:
 
 ### Core Technologies
 
-- **Python 3.12+**: Modern Python with type hints and async/await support
 - **aiohttp**: High-performance async HTTP client/server framework
 - **Pydantic**: Data validation and settings management
 - **asyncio**: Python's built-in async programming library
 - **pydantic-settings**: Environment-based configuration management
+- **FastAPI**: Used for test backend servers
 
 ### Development Tools
 
 - **uv**: Fast Python package manager and installer
 - **mypy**: Static type checking
 - **ruff**: Fast Python linter and formatter
-- **FastAPI**: Used for test backend servers
 
 ### Resources Used
 
