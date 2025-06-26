@@ -24,12 +24,6 @@ class ReverseProxy:
         self.logger = logger
         self.backends: list[BackendServer] = [BackendServer(backend_url) for backend_url in self.settings.backend_urls]
         self.load_balancer = LoadBalancer(LoadBalanceStrategy(self.settings.load_balance_strategy))
-        self.health_checker = HealthChecker(
-            self.settings.health_check_interval,
-            self.settings.health_check_timeout,
-            self.settings.health_check_max_connections,
-            self.logger,
-        )
         self.connection_pool = ConnectionPool(
             len(self.settings.backend_urls),
             self.settings.max_connections,
@@ -177,11 +171,10 @@ class ReverseProxy:
         if not self.backends:
             raise Exception("No backend servers configured")
 
+        self.logger.info(f"Reverse proxy starting with {len(self.backends)} backends")
+
         # Start connection pool
         await self.connection_pool.start()
-
-        # Start health checker
-        await self.health_checker.start(self.backends)
 
         # Start web server
         self.runner = web.AppRunner(self.app)
@@ -200,9 +193,6 @@ class ReverseProxy:
         """Stop the reverse proxy server"""
         self.logger.info("Shutting down proxy server...")
 
-        # Stop health checker
-        await self.health_checker.stop()
-
         # Stop web server
         if self.site:
             await self.site.stop()
@@ -216,15 +206,28 @@ class ReverseProxy:
 async def main():
     """Main entry point"""
     settings = Settings()
-    logger, listener = get_queue_logger()
+    logger, listener = get_queue_logger(
+        file_path=settings.log_path,
+        log_to_file=settings.log_to_file,
+        stream_stdout=settings.stream_stdout,
+        debug=settings.debug,
+    )
     proxy = ReverseProxy(settings, logger)
+    health_checker = HealthChecker(
+        settings.health_check_interval,
+        settings.health_check_timeout,
+        settings.health_check_max_connections,
+        logger,
+    )
 
     try:
+        await health_checker.start(proxy.backends)
         await proxy.start()
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        await health_checker.stop()
         await proxy.stop()
         listener.stop()
 
