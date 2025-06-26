@@ -1,0 +1,30 @@
+from collections import deque
+from dataclasses import dataclass, field
+
+
+@dataclass
+class BackendServer:
+    url: str
+    healthy: bool = True
+    last_check_time: float = 0
+    active_connections: int = 0
+    total_requests: int = 0  # Need to memory bound - depends on how logging metrics will work
+    failed_requests: int = 0
+    response_times: deque[float] = field(default_factory=lambda: deque(maxlen=100))
+
+    def __post_init__(self):
+        self.url = self.url.rstrip("/")
+
+    @property
+    def avg_response_time(self) -> float:
+        """Calculate average response time from last 100 requests"""
+        if not self.response_times:
+            return 0.0
+        return sum(self.response_times) / len(self.response_times)
+
+    def add_response_time(self, time: float):
+        """Add response time and keep only last 100"""
+        self.response_times.append(time)
+
+    def __str__(self):
+        return f"{self.url}, healthy={self.healthy}, active={self.active_connections})"
