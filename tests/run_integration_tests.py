@@ -99,12 +99,14 @@ class IntegrationTestRunner:
         expected_status: int = 200,
         data: Optional[Dict] = None,
         timeout: int = 10,
+        display: bool = True,
     ) -> Dict:
         """Run a single test against the reverse proxy."""
-        print(f"🧪 Running test: {name}")
+        if display:
+            print(f"🧪 Running test: {name}")
 
         url = f"http://{settings.host}:{settings.port}{path}"
-        start_time = time.time()
+        start_time = time.monotonic()
 
         try:
             client_timeout = aiohttp.ClientTimeout(total=timeout)
@@ -129,7 +131,7 @@ class IntegrationTestRunner:
             else:
                 raise ValueError(f"Unsupported method: {method}")
 
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             success = status == expected_status
 
             result = {
@@ -144,14 +146,15 @@ class IntegrationTestRunner:
             }
 
             if success:
-                print(f"✅ {name} - PASSED ({duration:.3f}s)")
+                if display:
+                    print(f"✅ {name} - PASSED ({duration:.3f}s)")
             else:
                 print(f"❌ {name} - FAILED (expected {expected_status}, got {status})")
 
             return result
 
         except Exception as e:
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             result = {
                 "name": name,
                 "method": method,
@@ -212,6 +215,57 @@ class IntegrationTestRunner:
             else:
                 self.test_results.append(result)
 
+    async def verify_load_balancing(self, num_requests: int = 5000) -> bool:
+        """
+        Sends a burst of requests to verify that they are distributed
+        across multiple backend servers.
+        """
+        print(f"\n🔬 Verifying load balancing with {num_requests} requests...")
+
+        tasks = [self._run_test(f"LB Check {i + 1}", "GET", "/", 200, display=False) for i in range(num_requests)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        server_hits: dict[str, int] = {}
+        server_response_times: dict[str, list[float]] = {}
+        successful_requests = 0
+        for res in results:
+            if isinstance(res, dict) and res.get("success"):
+                successful_requests += 1
+                response_data = res.get("response", {})
+                duration = res.get("duration", 1000)
+                if isinstance(response_data, dict):
+                    server_id = response_data.get("server_id")
+                    if server_id:
+                        server_hits[server_id] = server_hits.get(server_id, 0) + 1
+                        server_response_times.setdefault(server_id, []).append(duration)
+
+        if not server_hits:
+            print("❌ Load balancing verification failed: No successful requests with server_id found.")
+            return False
+
+        print("📊 Load Distribution:")
+        for server, count in sorted(server_hits.items()):
+            percentage = (count / successful_requests) * 100
+            avg_response_time = (
+                sum(server_response_times[server]) / len(server_response_times[server])
+                if server_response_times[server]
+                else 0.0
+            )
+            print(f"  - {server}: {count} hits ({percentage:.1f}%) - Avg: {avg_response_time:.3f}s")
+
+        unique_servers_hit = len(server_hits)
+        total_backends = len(self.backend_processes)
+
+        print(f"✅ Hit {unique_servers_hit} out of {total_backends} unique backend servers.")
+
+        # For a small number of backends (like 4), we should ideally hit all of them.
+        if unique_servers_hit >= total_backends * 0.75:
+            print("✅ Load distribution looks reasonable.")
+            return True
+        else:
+            print("❌ Load distribution seems poor. Too few backends were hit.")
+            return False
+
     def _print_summary(self) -> None:
         """Print a summary of test results."""
         print("\n" + "=" * 60)
@@ -237,49 +291,6 @@ class IntegrationTestRunner:
         for result in self.test_results:
             status_icon = "✅" if result["success"] else "❌"
             print(f"{status_icon} {result['name']}: {result.get('status', 'ERROR')} ({result['duration']:.3f}s)")
-
-    async def verify_load_balancing(self, num_requests: int = 50) -> bool:
-        """
-        Sends a burst of requests to verify that they are distributed
-        across multiple backend servers.
-        """
-        print(f"\n🔬 Verifying load balancing with {num_requests} requests...")
-
-        tasks = [self._run_test(f"LB Check {i + 1}", "GET", "/", 200) for i in range(num_requests)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        server_hits = {}
-        successful_requests = 0
-        for res in results:
-            if isinstance(res, dict) and res.get("success"):
-                successful_requests += 1
-                response_data = res.get("response", {})
-                if isinstance(response_data, dict):
-                    server_id = response_data.get("server_id")
-                    if server_id:
-                        server_hits[server_id] = server_hits.get(server_id, 0) + 1
-
-        if not server_hits:
-            print("❌ Load balancing verification failed: No successful requests with server_id found.")
-            return False
-
-        print("📊 Load Distribution:")
-        for server, count in sorted(server_hits.items()):
-            percentage = (count / successful_requests) * 100
-            print(f"  - {server}: {count} hits ({percentage:.1f}%)")
-
-        unique_servers_hit = len(server_hits)
-        total_backends = len(self.backend_processes)
-
-        print(f"✅ Hit {unique_servers_hit} out of {total_backends} unique backend servers.")
-
-        # For a small number of backends (like 4), we should ideally hit all of them.
-        if unique_servers_hit >= total_backends * 0.75:
-            print("✅ Load distribution looks reasonable.")
-            return True
-        else:
-            print("❌ Load distribution seems poor. Too few backends were hit.")
-            return False
 
     def cleanup(self) -> None:
         """Clean up all running processes."""
