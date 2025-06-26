@@ -29,3 +29,5 @@ functionalities required:
 5. Request is forwarded to backend
    ↓
 6. Response is sent back to client
+
+- can add request body validation if needed
