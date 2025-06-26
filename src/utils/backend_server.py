@@ -16,7 +16,7 @@ class BackendServer:
         url (str): The base URL of the backend server (e.g., "http://localhost:8001")
         healthy (bool): Current health status of the backend server
         last_check_time (float): Timestamp of the last health check (monotonic time)
-        active_connections (int): Number of currently active connections to this backend
+        _active_connections (int): Number of currently active connections to this backend (private)
         total_requests (int): Total number of requests forwarded to this backend
         failed_requests (int): Number of requests that failed or timed out
         response_times (deque[float]): Rolling window of response times (max 100 entries)
@@ -25,12 +25,13 @@ class BackendServer:
         - URL is automatically normalized by removing trailing slashes
         - Response times are stored in a bounded deque to prevent memory leaks
         - Health status is updated by the HealthChecker component
+        - Active connections are managed through increment/decrement methods
     """
 
     url: str
     healthy: bool = True
     last_check_time: float = 0.0
-    active_connections: int = 0
+    _active_connections: int = 0
     total_requests: int = 0  # Need to memory bound - depends on how logging metrics will work
     failed_requests: int = 0
     response_times: deque[float] = field(default_factory=lambda: deque(maxlen=100))
@@ -110,7 +111,7 @@ class BackendServer:
         return {
             "url": str(self.url),
             "healthy": bool(self.healthy),
-            "active_connections": int(self.active_connections),
+            "active_connections": int(self._active_connections),
             "total_requests": int(self.total_requests),
             "failed_requests": int(self.failed_requests),
             "success_rate": float(self.success_rate),
@@ -129,6 +130,16 @@ class BackendServer:
             ValueError: If time is negative (though not explicitly checked)
         """
         self.response_times.append(time)
+
+    def increment_active_connections(self, increment: int = 1) -> None:
+        self._active_connections += increment
+
+    def decrement_active_connections(self, decrement: int = 1) -> None:
+        self._active_connections -= decrement
+
+    @property
+    def active_connections(self) -> int:
+        return self._active_connections
 
     def __str__(self) -> str:
         """

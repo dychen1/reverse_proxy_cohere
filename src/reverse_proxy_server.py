@@ -148,7 +148,7 @@ class ReverseProxy:
                 )
 
             # Track connection
-            backend.active_connections += 1
+            backend.increment_active_connections()
             backend.total_requests += 1
 
             try:
@@ -162,7 +162,7 @@ class ReverseProxy:
                 self.logger.error(f"Error forwarding to {backend.url}: {e}")
                 return web.Response(text=f"Backend error: {str(e)}", status=502, headers={"Content-Type": "text/plain"})
             finally:
-                backend.active_connections -= 1
+                backend.decrement_active_connections()
 
         except Exception as e:
             self.logger.error(f"Error selecting backend: {e}")
