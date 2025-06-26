@@ -215,18 +215,13 @@ class ReverseProxy:
 
 async def main():
     """Main entry point"""
-    # Create settings instance
     settings = Settings()
-
-    # Create and start proxy
     proxy = ReverseProxy(settings)
-
     try:
         await proxy.start()
-        # Keep running
         await asyncio.Event().wait()
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        logger.info("Shutting down...")
     finally:
         await proxy.stop()
 
